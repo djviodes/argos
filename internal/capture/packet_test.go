@@ -106,3 +106,45 @@ func TestParseIPv4(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTransport(t *testing.T) {
+	rawBytes := []byte{
+		0xd4, 0x31, // srcPort = 0xd431
+		0x01, 0xbb, // dstPort = 0x01bb
+	}
+	rawBytesShortArray := slices.Clone(rawBytes)
+	rawBytesShortArray = slices.Delete(rawBytesShortArray, 1, 2)
+	tests := []struct {
+		name        string
+		raw         []byte
+		wantSrcPort uint16
+		wantDstPort uint16
+		wantErr     bool
+	}{
+		{name: "valid", raw: rawBytes, wantSrcPort: 0xd431, wantDstPort: 0x01bb},
+		{name: "truncated", raw: []byte{0x00, 0x01}, wantErr: true},
+		{name: "shortArrayLen", raw: rawBytesShortArray, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotSrcPort, gotDstPort, err := parseTransport(tt.raw)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err %t did not match wantErr %t", (err != nil), tt.wantErr)
+			}
+
+			if tt.wantErr {
+				return
+			}
+
+			if gotSrcPort != tt.wantSrcPort {
+				t.Errorf("got srcPort %#x, want srcPort %#x", gotSrcPort, tt.wantSrcPort)
+			}
+
+			if gotDstPort != tt.wantDstPort {
+				t.Errorf("got dstPort %#x, want dstPort %#x", gotDstPort, tt.wantDstPort)
+			}
+		})
+	}
+}
