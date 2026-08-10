@@ -1,0 +1,16 @@
+# Claude Code local settings
+.claude/
+
+# Build output
+/argos
+*.exe
+*.test
+
+# Test coverage profiles
+*.out
+
+# Environment / local secrets
+.env
+
+# macOS
+.DS_Store
