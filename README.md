@@ -8,7 +8,7 @@ Early development. Core capture and parsing logic is being built incrementally.
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.26+
 - Kafka (local instance via Docker)
 - PostgreSQL
 - Root/elevated privileges (or `CAP_NET_RAW`) for raw socket packet capture

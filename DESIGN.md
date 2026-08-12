@@ -116,13 +116,18 @@ Shutdown is coordinated from `main.go`:
 ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 defer stop()
 
+cap, err := capture.New(iface)
+if err != nil {
+    return err
+}
+
 g, ctx := errgroup.WithContext(ctx)
-g.Go(func() error { return capture.Run(ctx) })
+g.Go(func() error { return cap.Run(ctx) })
 g.Go(func() error { return flow.Run(ctx) })
 g.Go(func() error { return kafka.Run(ctx) })
 g.Go(func() error { return storage.Run(ctx) })
 
-err := g.Wait()
+return g.Wait()
 ```
 
 - A single root `context.Context`, cancelled on `SIGINT`/`SIGTERM`, is threaded through every
@@ -148,10 +153,18 @@ err := g.Wait()
 - **Lifecycle**: struct-based stages (not bare functions) coordinated via a single root `context`
   + `errgroup`, with cascading drain-on-shutdown rather than an immediate kill. Chosen so
   in-flight flow records aren't silently dropped on `Ctrl+C`.
+- **Packet capture mechanism**: raw `AF_PACKET`/`SOCK_RAW` sockets via `golang.org/x/sys/unix`,
+  not a pcap-based library. Chosen to keep the raw-socket/byte-order learning goal intact — a
+  pcap wrapper would hand back already-parsed frames, skipping exactly the fundamentals this
+  project exists to practice. The socket's `SO_RCVTIMEO` is set to 1 second so `Run`'s blocking
+  read periodically returns even with no traffic, keeping `ctx` cancellation responsive without
+  needing to select on a raw file descriptor directly. Errors are split by severity: a
+  `parsePacket` failure (malformed or out-of-scope input) is logged and the packet is dropped,
+  not treated as fatal; a socket-level read error is fatal and propagates up, cascading a
+  shutdown through `errgroup`.
 
 Still open, to be filled in as real decisions are made:
 
-- Choice of packet capture library (raw sockets vs. a pcap-based library)
 - Flow record schema / Postgres schema design
 - Flow timeout/expiry strategy
 - Whether to support multiple interfaces
