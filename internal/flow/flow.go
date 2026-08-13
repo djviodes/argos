@@ -56,3 +56,31 @@ func newFlowKey(pkt PacketSource) (FlowKey, error) {
 		protocol: pkt.Protocol(),
 	}, nil
 }
+
+func (f *Flow) add(pkt PacketSource) error {
+	key, err := newFlowKey(pkt)
+
+	if err != nil {
+		return fmt.Errorf("creating flow key: %w", err)
+	}
+
+	record, exists := f.records[key]
+
+	if !exists {
+		record = &FlowRecord{
+			FlowKey:     key,
+			byteCount:   pkt.Len(),
+			packetCount: 1,
+			firstSeen:   pkt.Timestamp(),
+			lastSeen:    pkt.Timestamp(),
+		}
+
+		f.records[key] = record
+	} else {
+		record.byteCount += pkt.Len()
+		record.packetCount++
+		record.lastSeen = pkt.Timestamp()
+	}
+
+	return nil
+}
