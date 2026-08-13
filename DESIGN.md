@@ -106,7 +106,7 @@ with fake flow records and never need a running Kafka broker or Postgres instanc
 
 ## Lifecycle and shutdown
 
-Each stage is a struct, not a bare function — e.g. `capture.New(iface) *Capture`, with a
+Each stage is a struct, not a bare function — e.g. `capture.New(iface) (*Capture, error)`, with a
 `Run(ctx) error` method and a `Packets() <-chan Packet` accessor. The struct gives each stage a
 natural place to hold the resource that needs cleanup (socket, producer handle, DB pool).
 
@@ -120,15 +120,23 @@ cap, err := capture.New(iface)
 if err != nil {
     return err
 }
+flowAgg := flow.New()
 
 g, ctx := errgroup.WithContext(ctx)
 g.Go(func() error { return cap.Run(ctx) })
-g.Go(func() error { return flow.Run(ctx) })
+g.Go(func() error { return flowAgg.Run(ctx, bridgePackets(cap.Packets())) })
 g.Go(func() error { return kafka.Run(ctx) })
 g.Go(func() error { return storage.Run(ctx) })
 
 return g.Wait()
 ```
+
+`bridgePackets` is a small adapter `cmd/argos` owns: it ranges over `cap.Packets()` (`<-chan
+capture.Packet`) and re-sends each value onto a `chan flow.PacketSource`. This isn't optional
+boilerplate — Go's channel types are invariant, so a `<-chan capture.Packet` can't be passed
+directly where a `<-chan flow.PacketSource` is expected, even though `capture.Packet` satisfies
+that interface. `cmd/argos` is the one place allowed to know about both concrete types, so the
+bridging belongs there, keeping `flow` free of any import from `capture`.
 
 - A single root `context.Context`, cancelled on `SIGINT`/`SIGTERM`, is threaded through every
   stage.
@@ -162,11 +170,33 @@ return g.Wait()
   `parsePacket` failure (malformed or out-of-scope input) is logged and the packet is dropped,
   not treated as fatal; a socket-level read error is fatal and propagates up, cascading a
   shutdown through `errgroup`.
+- **Flow timeout/expiry strategy**: idle timeout only, fixed at 60 seconds, checked via a
+  periodic ticker inside `Flow.Run` rather than a per-flow timer. An active timeout (force-flushing
+  a flow that's still receiving traffic after some maximum duration) was considered but deferred —
+  idle-only covers the common case without the extra bookkeeping an active timeout would add.
+
+## Post-MVP
+
+Decisions made now that intentionally defer real work until after the MVP is functional,
+recorded here so the reasoning behind the deferral isn't lost:
+
+- **IPv6 (and other protocols) support**: the project is IPv4-only for now (see Non-goals), but
+  `flow.FlowKey` already uses `netip.Addr` rather than `net.IP` specifically so this transition is
+  painless later — `netip.Addr` represents IPv4 and IPv6 uniformly, so `FlowKey`'s shape won't
+  need to change when IPv6 support is added.
+- **`flow`'s flush path becoming a worker pool**: `Flow.Run` is currently a single goroutine that
+  both owns the aggregation map and performs the (potentially slow, if the downstream consumer is
+  behind) blocking send to `Flushed()`. A large `flushIdle` cycle can delay processing new incoming
+  packets until it completes. The planned fix: keep the map single-owner — only one goroutine ever
+  touches `f.flows`, so no mutex is needed — but hand records that have already been removed from
+  the map off to a small pool of worker goroutines whose only job is the downstream send. This
+  decouples "identify what's idle" (fast, sequential) from "wait for someone to receive it"
+  (potentially slow, now parallelized). Deferred because it adds real concurrency complexity for a
+  benefit that only matters at a scale this project isn't at yet.
 
 Still open, to be filled in as real decisions are made:
 
 - Flow record schema / Postgres schema design
-- Flow timeout/expiry strategy
 - Whether to support multiple interfaces
 
 ## Non-goals (for now)
@@ -175,3 +205,4 @@ Still open, to be filled in as real decisions are made:
 - Real-time alerting or anomaly detection
 - Support for non-Linux platforms
 - Handling of encrypted or tunneled traffic beyond outer headers
+- IPv6 support; protocols other than TCP/UDP (see Post-MVP for IPv6)

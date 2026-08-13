@@ -4,7 +4,7 @@ A Go-based network traffic monitor built for hands-on learning in raw sockets, p
 
 ## Status
 
-Early development. Core capture and parsing logic is being built incrementally.
+Early development. Core capture, parsing, and flow aggregation logic is being built incrementally.
 
 ## Requirements
 
