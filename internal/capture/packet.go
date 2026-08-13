@@ -40,6 +40,48 @@ func (p Packet) Len() int { return p.length }
 // Timestamp returns the time the packet was captured.
 func (p Packet) Timestamp() time.Time { return p.timestamp }
 
+func parsePacket(raw []byte, capturedAt time.Time) (p Packet, err error) {
+	const ipv4EtherType = 0x0800
+	const protocolTCP = 6
+	const protocolUDP = 17
+
+	etherType, err := parseEthernet(raw)
+	if err != nil {
+		return
+	}
+
+	if etherType != ipv4EtherType {
+		err = fmt.Errorf("ethernet type %#x out of scope", etherType)
+		return
+	}
+
+	protocol, srcIP, dstIP, headerLen, err := parseIPv4(raw[14:])
+	if err != nil {
+		return
+	}
+
+	if protocol != protocolTCP && protocol != protocolUDP {
+		err = fmt.Errorf("protocol %d out of scope", protocol)
+		return
+	}
+
+	srcPort, dstPort, err := parseTransport(raw[14+headerLen:])
+	if err != nil {
+		return
+	}
+
+	p = Packet{
+		srcIP:     srcIP,
+		dstIP:     dstIP,
+		srcPort:   srcPort,
+		dstPort:   dstPort,
+		protocol:  protocol,
+		length:    len(raw),
+		timestamp: capturedAt,
+	}
+	return
+}
+
 func parseEthernet(raw []byte) (etherType uint16, err error) {
 	if len(raw) < 14 {
 		err = fmt.Errorf("ethernet header truncated: got %d bytes, want at least 14", len(raw))
@@ -87,47 +129,5 @@ func parseTransport(raw []byte) (srcPort, dstPort uint16, err error) {
 	srcPort = binary.BigEndian.Uint16(raw[0:2])
 	dstPort = binary.BigEndian.Uint16(raw[2:4])
 
-	return
-}
-
-func parsePacket(raw []byte, capturedAt time.Time) (p Packet, err error) {
-	const ipv4EtherType = 0x0800
-	const protocolTCP = 6
-	const protocolUDP = 17
-
-	etherType, err := parseEthernet(raw)
-	if err != nil {
-		return
-	}
-
-	if etherType != ipv4EtherType {
-		err = fmt.Errorf("ethernet type %#x out of scope", etherType)
-		return
-	}
-
-	protocol, srcIP, dstIP, headerLen, err := parseIPv4(raw[14:])
-	if err != nil {
-		return
-	}
-
-	if protocol != protocolTCP && protocol != protocolUDP {
-		err = fmt.Errorf("protocol %d out of scope", protocol)
-		return
-	}
-
-	srcPort, dstPort, err := parseTransport(raw[14+headerLen:])
-	if err != nil {
-		return
-	}
-
-	p = Packet{
-		srcIP:     srcIP,
-		dstIP:     dstIP,
-		srcPort:   srcPort,
-		dstPort:   dstPort,
-		protocol:  protocol,
-		length:    len(raw),
-		timestamp: capturedAt,
-	}
 	return
 }
