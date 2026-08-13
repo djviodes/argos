@@ -1,12 +1,20 @@
+// Package flow aggregates captured packets into flow records, grouped by
+// source/destination IP and port, tracking byte counts and first/last-seen
+// timestamps, and flushes completed records for publishing downstream.
 package flow
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"time"
 )
 
+// PacketSource describes the fields flow needs from a captured packet.
+// capture.Packet satisfies this interface, but flow depends only on the
+// interface, never on capture's concrete type.
 type PacketSource interface {
 	SrcIP() net.IP
 	DstIP() net.IP
@@ -17,6 +25,9 @@ type PacketSource interface {
 	Timestamp() time.Time
 }
 
+// FlowKey identifies a flow by its 5-tuple: source and destination address,
+// source and destination port, and protocol. It is comparable, so it can be
+// used as a map key.
 type FlowKey struct {
 	srcIP    netip.Addr
 	dstIP    netip.Addr
@@ -25,6 +36,8 @@ type FlowKey struct {
 	protocol uint8
 }
 
+// FlowRecord aggregates the packets seen for a single flow: total bytes and
+// packet count, and the first and last time a packet was observed.
 type FlowRecord struct {
 	FlowKey
 	byteCount   int
@@ -33,8 +46,60 @@ type FlowRecord struct {
 	lastSeen    time.Time
 }
 
+// Flow aggregates packets into FlowRecords, keyed by FlowKey, and flushes
+// them to the channel returned by Flushed once a flow has been idle past the
+// timeout or Run is shutting down.
 type Flow struct {
-	records map[FlowKey]*FlowRecord
+	flows   map[FlowKey]*FlowRecord
+	flushed chan FlowRecord
+}
+
+// New returns a Flow ready to aggregate packets.
+func New() *Flow {
+	return &Flow{
+		flows:   make(map[FlowKey]*FlowRecord),
+		flushed: make(chan FlowRecord),
+	}
+}
+
+// Flushed returns the channel completed flow records are sent to. A record
+// is sent either when its flow has been idle past the timeout or when Run is
+// shutting down. The channel is closed once Run returns.
+func (f *Flow) Flushed() <-chan FlowRecord { return f.flushed }
+
+// Run consumes packets from source, aggregating them into flow records via
+// add. Records for flows that have been idle past the timeout are flushed
+// periodically. When ctx is cancelled or source is closed, Run flushes every
+// remaining record before returning, then closes the channel returned by
+// Flushed.
+func (f *Flow) Run(ctx context.Context, source <-chan PacketSource) error {
+	const tickInterval = 1 * time.Second
+	ticker := time.NewTicker(tickInterval)
+
+	defer ticker.Stop()
+	defer close(f.flushed)
+
+	for {
+		select {
+		case <-ctx.Done():
+			f.flushAll(ctx)
+
+			return nil
+		case pkt, ok := <-source:
+			if !ok {
+				f.flushAll(ctx)
+
+				return nil
+			}
+
+			if err := f.add(pkt); err != nil {
+				slog.Warn("adding packet to flow", "err", err)
+				continue
+			}
+		case <-ticker.C:
+			f.flushIdle(ctx)
+		}
+	}
 }
 
 func (f *Flow) add(pkt PacketSource) error {
@@ -44,7 +109,7 @@ func (f *Flow) add(pkt PacketSource) error {
 		return fmt.Errorf("creating flow key: %w", err)
 	}
 
-	record, exists := f.records[key]
+	record, exists := f.flows[key]
 
 	if !exists {
 		record = &FlowRecord{
@@ -55,7 +120,7 @@ func (f *Flow) add(pkt PacketSource) error {
 			lastSeen:    pkt.Timestamp(),
 		}
 
-		f.records[key] = record
+		f.flows[key] = record
 	} else {
 		record.byteCount += pkt.Len()
 		record.packetCount++
@@ -63,6 +128,34 @@ func (f *Flow) add(pkt PacketSource) error {
 	}
 
 	return nil
+}
+
+func (f *Flow) flushAll(ctx context.Context) {
+	for _, flow := range f.flows {
+		select {
+		case f.flushed <- *flow:
+			delete(f.flows, flow.FlowKey)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (f *Flow) flushIdle(ctx context.Context) {
+	const idleTimeout = 60 * time.Second
+
+	for _, flow := range f.flows {
+		if time.Since(flow.lastSeen) <= idleTimeout {
+			continue
+		}
+
+		select {
+		case f.flushed <- *flow:
+			delete(f.flows, flow.FlowKey)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func newFlowKey(pkt PacketSource) (FlowKey, error) {
