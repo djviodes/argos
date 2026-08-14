@@ -3,7 +3,6 @@ package flow
 import (
 	"context"
 	"net"
-	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -27,9 +26,11 @@ func (p fakePacket) Protocol() uint8      { return p.protocol }
 func (p fakePacket) Len() int             { return p.length }
 func (p fakePacket) Timestamp() time.Time { return p.timestamp }
 
-func TestNewFlowKey(t *testing.T) {
+func newFakePacketAndKey(t *testing.T, srcIP net.IP) (fakePacket, FlowKey) {
+	t.Helper()
+
 	pkt := fakePacket{
-		srcIP:     net.IP{0xc0, 0xa8, 0x01, 0x0a},
+		srcIP:     srcIP,
 		dstIP:     net.IP{0x5d, 0xb8, 0xd8, 0x22},
 		srcPort:   0xd431,
 		dstPort:   0x01bb,
@@ -37,19 +38,24 @@ func TestNewFlowKey(t *testing.T) {
 		length:    38,
 		timestamp: time.Now(),
 	}
+
+	flowKey, err := newFlowKey(pkt)
+
+	if err != nil {
+		t.Fatalf("error when creating flow key: %s", err)
+	}
+
+	return pkt, flowKey
+}
+
+func TestNewFlowKey(t *testing.T) {
+	pkt, validFlowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
+
 	invalidSrcIPPkt := pkt
 	invalidSrcIPPkt.srcIP = net.IP{0xd4}
 	invalidDstIPPkt := pkt
 	invalidDstIPPkt.dstIP = net.IP{0x01}
-	validSrcAddr, _ := netip.AddrFromSlice(net.IP{0xc0, 0xa8, 0x01, 0x0a})
-	validDstAddr, _ := netip.AddrFromSlice(net.IP{0x5d, 0xb8, 0xd8, 0x22})
-	validFlowKey := FlowKey{
-		srcIP:    validSrcAddr,
-		dstIP:    validDstAddr,
-		srcPort:  0xd431,
-		dstPort:  0x01bb,
-		protocol: 0x06,
-	}
+
 	tests := []struct {
 		name        string
 		pkt         fakePacket
@@ -98,31 +104,20 @@ func TestNewFlowKey(t *testing.T) {
 
 func TestAdd(t *testing.T) {
 	f := New()
+
 	firstSeenTimestamp := time.Now().Add(-5 * time.Second)
 	secondSeenTimestamp := time.Now()
-	pkt := fakePacket{
-		srcIP:     net.IP{0xc0, 0xa8, 0x01, 0x0a},
-		dstIP:     net.IP{0x5d, 0xb8, 0xd8, 0x22},
-		srcPort:   0xd431,
-		dstPort:   0x01bb,
-		protocol:  0x06,
-		length:    38,
-		timestamp: firstSeenTimestamp,
-	}
+
+	pkt, flowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
+	pkt.timestamp = firstSeenTimestamp
+
 	secondPkt := pkt
 	secondPkt.timestamp = secondSeenTimestamp
+
 	invalidIPPkt := pkt
 	invalidIPPkt.srcIP = net.IP{0xd4}
 	invalidIPPkt.dstIP = net.IP{0x01}
-	srcAddr, _ := netip.AddrFromSlice(pkt.srcIP)
-	dstAddr, _ := netip.AddrFromSlice(pkt.dstIP)
-	flowKey := FlowKey{
-		srcIP:    srcAddr,
-		dstIP:    dstAddr,
-		srcPort:  pkt.srcPort,
-		dstPort:  pkt.dstPort,
-		protocol: pkt.protocol,
-	}
+
 	tests := []struct {
 		name            string
 		pkt             fakePacket
@@ -168,28 +163,18 @@ func TestAdd(t *testing.T) {
 
 func TestFlushAll(t *testing.T) {
 	ctx := context.Background()
-	f := New()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
 	wantFlows := make(map[FlowKey]*FlowRecord)
-	firstSrcAddr, _ := netip.AddrFromSlice(net.IP{0xc0, 0xa8, 0x01, 0x0a})
-	secondSrcAddr, _ := netip.AddrFromSlice(net.IP{0x0a, 0x00, 0x00, 0x05})
-	firstDstAddr, _ := netip.AddrFromSlice(net.IP{0x5d, 0xb8, 0xd8, 0x22})
-	secondDstAddr, _ := netip.AddrFromSlice(net.IP{0x5d, 0xb8, 0xd8, 0x22})
-	firstFlowKey := FlowKey{
-		srcIP:    firstSrcAddr,
-		dstIP:    firstDstAddr,
-		srcPort:  0xd431,
-		dstPort:  0x01bb,
-		protocol: 0x06,
-	}
-	secondFlowKey := FlowKey{
-		srcIP:    secondSrcAddr,
-		dstIP:    secondDstAddr,
-		srcPort:  0xd431,
-		dstPort:  0x01bb,
-		protocol: 0x06,
-	}
+	cancelledCtxWantFlows := make(map[FlowKey]*FlowRecord)
+
+	_, firstFlowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
+	_, secondFlowKey := newFakePacketAndKey(t, net.IP{0x0a, 0x00, 0x00, 0x05})
+
 	firstSeenTimestamp := time.Now().Add(-5 * time.Second)
 	secondSeenTimestamp := time.Now()
+
 	firstFlowRecord := FlowRecord{
 		FlowKey:     firstFlowKey,
 		byteCount:   38,
@@ -205,25 +190,29 @@ func TestFlushAll(t *testing.T) {
 		lastSeen:    secondSeenTimestamp,
 	}
 
-	f.flows[firstFlowKey] = &firstFlowRecord
-	f.flows[secondFlowKey] = &secondFlowRecord
 	wantFlows[firstFlowKey] = &firstFlowRecord
 	wantFlows[secondFlowKey] = &secondFlowRecord
 
 	tests := []struct {
-		name      string
-		ctx       context.Context
-		wantFlows map[FlowKey]*FlowRecord
+		name               string
+		ctx                context.Context
+		wantFlows          map[FlowKey]*FlowRecord
+		wantRemainingFlows int
 	}{
-		{name: "valid", ctx: ctx, wantFlows: wantFlows},
+		{name: "valid", ctx: ctx, wantFlows: wantFlows, wantRemainingFlows: 0},
+		{name: "cancelledCtx", ctx: cancelledCtx, wantFlows: cancelledCtxWantFlows, wantRemainingFlows: 2},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			f := New()
+			f.flows[firstFlowKey] = &firstFlowRecord
+			f.flows[secondFlowKey] = &secondFlowRecord
+
 			recordSlice := []FlowRecord{}
-			correctFlowsFlushed := map[FlowKey]bool{
-				firstFlowKey:  false,
-				secondFlowKey: false,
+			correctFlowsFlushed := make(map[FlowKey]bool)
+			for key := range tt.wantFlows {
+				correctFlowsFlushed[key] = false
 			}
 
 			var wg sync.WaitGroup
@@ -277,41 +266,9 @@ func TestFlushAll(t *testing.T) {
 				}
 			}
 
-			if len(f.flows) != 0 {
-				t.Errorf("expected length of flows to be 0, got %#x", len(f.flows))
+			if len(f.flows) != tt.wantRemainingFlows {
+				t.Errorf("got flow length %#x, want flow length %#x", len(f.flows), tt.wantRemainingFlows)
 			}
 		})
-	}
-}
-
-func TestFlushAllCancelledCtx(t *testing.T) {
-	f := New()
-	srcAddr, _ := netip.AddrFromSlice(net.IP{0xc0, 0xa8, 0x01, 0x0a})
-	dstAddr, _ := netip.AddrFromSlice(net.IP{0x5d, 0xb8, 0xd8, 0x22})
-	flowKey := FlowKey{
-		srcIP:    srcAddr,
-		dstIP:    dstAddr,
-		srcPort:  0xd431,
-		dstPort:  0x01bb,
-		protocol: 0x06,
-	}
-	seen := time.Now()
-	flowRecord := FlowRecord{
-		FlowKey:     flowKey,
-		byteCount:   38,
-		packetCount: 1,
-		firstSeen:   seen,
-		lastSeen:    seen,
-	}
-
-	f.flows[flowKey] = &flowRecord
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	f.flushAll(ctx)
-
-	if len(f.flows) != 1 {
-		t.Errorf("expected length of flows to be 1, got %#x", len(f.flows))
 	}
 }
