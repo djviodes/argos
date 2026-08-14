@@ -272,3 +272,114 @@ func TestFlushAll(t *testing.T) {
 		})
 	}
 }
+
+func TestFlushIdle(t *testing.T) {
+	ctx := context.Background()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	wantFlows := make(map[FlowKey]*FlowRecord)
+	cancelledCtxWantFlows := make(map[FlowKey]*FlowRecord)
+
+	_, firstFlowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
+	_, secondFlowKey := newFakePacketAndKey(t, net.IP{0x0a, 0x00, 0x00, 0x05})
+
+	firstSeenTimestamp := time.Now().Add(-65 * time.Second)
+	secondSeenTimestamp := time.Now()
+
+	firstFlowRecord := FlowRecord{
+		FlowKey:     firstFlowKey,
+		byteCount:   38,
+		packetCount: 1,
+		firstSeen:   firstSeenTimestamp,
+		lastSeen:    firstSeenTimestamp,
+	}
+	secondFlowRecord := FlowRecord{
+		FlowKey:     secondFlowKey,
+		byteCount:   38,
+		packetCount: 1,
+		firstSeen:   secondSeenTimestamp,
+		lastSeen:    secondSeenTimestamp,
+	}
+
+	wantFlows[firstFlowKey] = &firstFlowRecord
+
+	tests := []struct {
+		name               string
+		ctx                context.Context
+		wantFlows          map[FlowKey]*FlowRecord
+		wantRemainingFlows int
+	}{
+		{name: "valid", ctx: ctx, wantFlows: wantFlows, wantRemainingFlows: 1},
+		{name: "cancelledCtx", ctx: cancelledCtx, wantFlows: cancelledCtxWantFlows, wantRemainingFlows: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := New()
+			f.flows[firstFlowKey] = &firstFlowRecord
+			f.flows[secondFlowKey] = &secondFlowRecord
+
+			recordSlice := []FlowRecord{}
+			correctFlowsFlushed := make(map[FlowKey]bool)
+			for key := range tt.wantFlows {
+				correctFlowsFlushed[key] = false
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				f.flushIdle(tt.ctx)
+			}()
+
+			for i := 0; i < len(tt.wantFlows); i++ {
+				select {
+				case record := <-f.Flushed():
+					recordSlice = append(recordSlice, record)
+				case <-time.After(time.Second):
+					t.Fatal("timed out waiting for flushed record")
+				}
+			}
+
+			wg.Wait()
+
+			for _, record := range recordSlice {
+				if tt.wantFlows[record.FlowKey] == nil {
+					t.Error("FlowKey does not exist in expected flows")
+					continue
+				}
+
+				if record.byteCount != tt.wantFlows[record.FlowKey].byteCount {
+					t.Errorf("got flow record byte count %#x, want flow record byte count %#x", record.byteCount, tt.wantFlows[record.FlowKey].byteCount)
+				}
+
+				if record.packetCount != tt.wantFlows[record.FlowKey].packetCount {
+					t.Errorf("got flow record packet count %#x, want flow record packet count %#x", record.packetCount, tt.wantFlows[record.FlowKey].packetCount)
+				}
+
+				if record.firstSeen != tt.wantFlows[record.FlowKey].firstSeen {
+					t.Errorf("got flow record first seen %v, want flow record first seen %v", record.firstSeen, tt.wantFlows[record.FlowKey].firstSeen)
+				}
+
+				if record.lastSeen != tt.wantFlows[record.FlowKey].lastSeen {
+					t.Errorf("got flow record last seen %v, want flow record last seen %v", record.lastSeen, tt.wantFlows[record.FlowKey].lastSeen)
+				}
+
+				if _, ok := tt.wantFlows[record.FlowKey]; ok {
+					correctFlowsFlushed[record.FlowKey] = true
+				}
+			}
+
+			for _, foundFlowKey := range correctFlowsFlushed {
+				if foundFlowKey == false {
+					t.Errorf("flow key never got flushed")
+				}
+			}
+
+			if len(f.flows) != tt.wantRemainingFlows {
+				t.Errorf("got flow length %#x, want flow length %#x", len(f.flows), tt.wantRemainingFlows)
+			}
+		})
+	}
+}
