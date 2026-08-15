@@ -383,3 +383,68 @@ func TestFlushIdle(t *testing.T) {
 		})
 	}
 }
+
+func TestRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pkt, flowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
+
+	source := make(chan PacketSource)
+
+	tests := []struct {
+		name               string
+		ctx                context.Context
+		ctxCancel          context.CancelFunc
+		source             chan PacketSource
+		wantRemainingFlows int
+	}{
+		{name: "cancelledCtx", ctx: ctx, ctxCancel: cancel, source: source, wantRemainingFlows: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := New()
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				f.Run(tt.ctx, tt.source)
+			}()
+
+			tt.source <- pkt
+			tt.ctxCancel()
+			record := <-f.Flushed()
+
+			wg.Wait()
+
+			if record.FlowKey != flowKey {
+				t.Error("flow keys don't match")
+			}
+
+			if record.byteCount != pkt.length {
+				t.Error("byte counts don't match")
+			}
+
+			if record.packetCount != 1 {
+				t.Error("packet counts don't match")
+			}
+
+			if record.firstSeen != pkt.Timestamp() {
+				t.Error("first seens don't match")
+			}
+
+			if record.lastSeen != pkt.Timestamp() {
+				t.Error("last seens don't match")
+			}
+
+			if len(f.flows) != tt.wantRemainingFlows {
+				t.Error("flushAll did not flush add flows correctly")
+			}
+
+			if _, ok := <-f.Flushed(); !ok {
+				t.Error("flushed did not close correctly")
+			}
+		})
+	}
+}
