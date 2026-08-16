@@ -69,9 +69,11 @@ func (f *Flow) Flushed() <-chan FlowRecord { return f.flushed }
 
 // Run consumes packets from source, aggregating them into flow records via
 // add. Records for flows that have been idle past the timeout are flushed
-// periodically. When ctx is cancelled or source is closed, Run flushes every
-// remaining record before returning, then closes the channel returned by
-// Flushed.
+// periodically. When ctx is cancelled or source is closed, Run attempts to
+// flush every remaining record before returning, but won't wait indefinitely
+// for an unresponsive downstream consumer — a record can be left unflushed
+// if it isn't received within a short, bounded window. The channel returned
+// by Flushed is closed once Run returns.
 func (f *Flow) Run(ctx context.Context, source <-chan PacketSource) error {
 	const tickInterval = 1 * time.Second
 	const drainTimeout = 5 * time.Second

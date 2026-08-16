@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+type flushTestCase struct {
+	name               string
+	ctx                context.Context
+	wantFlows          map[FlowKey]*FlowRecord
+	wantRemainingFlows int
+}
+
 type fakePacket struct {
 	srcIP     net.IP
 	dstIP     net.IP
@@ -46,6 +53,69 @@ func newFakePacketAndKey(t *testing.T, srcIP net.IP) (fakePacket, FlowKey) {
 	}
 
 	return pkt, flowKey
+}
+
+func runFlushTest(t *testing.T, f *Flow, tt flushTestCase, flushFunc func(context.Context)) {
+	recordSlice := []FlowRecord{}
+	correctFlowsFlushed := make(map[FlowKey]bool)
+	for key := range tt.wantFlows {
+		correctFlowsFlushed[key] = false
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		flushFunc(tt.ctx)
+	}()
+
+	for i := 0; i < len(tt.wantFlows); i++ {
+		select {
+		case record := <-f.Flushed():
+			recordSlice = append(recordSlice, record)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for flushed record")
+		}
+	}
+
+	wg.Wait()
+
+	for _, record := range recordSlice {
+		if tt.wantFlows[record.FlowKey] == nil {
+			t.Error("FlowKey does not exist in expected flows")
+			continue
+		}
+
+		if record.byteCount != tt.wantFlows[record.FlowKey].byteCount {
+			t.Errorf("got flow record byte count %#x, want flow record byte count %#x", record.byteCount, tt.wantFlows[record.FlowKey].byteCount)
+		}
+
+		if record.packetCount != tt.wantFlows[record.FlowKey].packetCount {
+			t.Errorf("got flow record packet count %#x, want flow record packet count %#x", record.packetCount, tt.wantFlows[record.FlowKey].packetCount)
+		}
+
+		if record.firstSeen != tt.wantFlows[record.FlowKey].firstSeen {
+			t.Errorf("got flow record first seen %v, want flow record first seen %v", record.firstSeen, tt.wantFlows[record.FlowKey].firstSeen)
+		}
+
+		if record.lastSeen != tt.wantFlows[record.FlowKey].lastSeen {
+			t.Errorf("got flow record last seen %v, want flow record last seen %v", record.lastSeen, tt.wantFlows[record.FlowKey].lastSeen)
+		}
+
+		if _, ok := tt.wantFlows[record.FlowKey]; ok {
+			correctFlowsFlushed[record.FlowKey] = true
+		}
+	}
+
+	for _, foundFlowKey := range correctFlowsFlushed {
+		if foundFlowKey == false {
+			t.Errorf("flow key never got flushed")
+		}
+	}
+
+	if len(f.flows) != tt.wantRemainingFlows {
+		t.Errorf("got flow length %#x, want flow length %#x", len(f.flows), tt.wantRemainingFlows)
+	}
 }
 
 func TestNewFlowKey(t *testing.T) {
@@ -193,12 +263,7 @@ func TestFlushAll(t *testing.T) {
 	wantFlows[firstFlowKey] = &firstFlowRecord
 	wantFlows[secondFlowKey] = &secondFlowRecord
 
-	tests := []struct {
-		name               string
-		ctx                context.Context
-		wantFlows          map[FlowKey]*FlowRecord
-		wantRemainingFlows int
-	}{
+	tests := []flushTestCase{
 		{name: "valid", ctx: ctx, wantFlows: wantFlows, wantRemainingFlows: 0},
 		{name: "cancelledCtx", ctx: cancelledCtx, wantFlows: cancelledCtxWantFlows, wantRemainingFlows: 2},
 	}
@@ -209,66 +274,7 @@ func TestFlushAll(t *testing.T) {
 			f.flows[firstFlowKey] = &firstFlowRecord
 			f.flows[secondFlowKey] = &secondFlowRecord
 
-			recordSlice := []FlowRecord{}
-			correctFlowsFlushed := make(map[FlowKey]bool)
-			for key := range tt.wantFlows {
-				correctFlowsFlushed[key] = false
-			}
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				f.flushAll(tt.ctx)
-			}()
-
-			for i := 0; i < len(tt.wantFlows); i++ {
-				select {
-				case record := <-f.Flushed():
-					recordSlice = append(recordSlice, record)
-				case <-time.After(time.Second):
-					t.Fatal("timed out waiting for flushed record")
-				}
-			}
-
-			wg.Wait()
-
-			for _, record := range recordSlice {
-				if tt.wantFlows[record.FlowKey] == nil {
-					t.Error("FlowKey does not exist in expected flows")
-					continue
-				}
-
-				if record.byteCount != tt.wantFlows[record.FlowKey].byteCount {
-					t.Errorf("got flow record byte count %#x, want flow record byte count %#x", record.byteCount, tt.wantFlows[record.FlowKey].byteCount)
-				}
-
-				if record.packetCount != tt.wantFlows[record.FlowKey].packetCount {
-					t.Errorf("got flow record packet count %#x, want flow record packet count %#x", record.packetCount, tt.wantFlows[record.FlowKey].packetCount)
-				}
-
-				if record.firstSeen != tt.wantFlows[record.FlowKey].firstSeen {
-					t.Errorf("got flow record first seen %v, want flow record first seen %v", record.firstSeen, tt.wantFlows[record.FlowKey].firstSeen)
-				}
-
-				if record.lastSeen != tt.wantFlows[record.FlowKey].lastSeen {
-					t.Errorf("got flow record last seen %v, want flow record last seen %v", record.lastSeen, tt.wantFlows[record.FlowKey].lastSeen)
-				}
-
-				if _, ok := tt.wantFlows[record.FlowKey]; ok {
-					correctFlowsFlushed[record.FlowKey] = true
-				}
-			}
-
-			for _, foundFlowKey := range correctFlowsFlushed {
-				if foundFlowKey == false {
-					t.Errorf("flow key never got flushed")
-				}
-			}
-
-			if len(f.flows) != tt.wantRemainingFlows {
-				t.Errorf("got flow length %#x, want flow length %#x", len(f.flows), tt.wantRemainingFlows)
-			}
+			runFlushTest(t, f, tt, f.flushAll)
 		})
 	}
 }
@@ -304,12 +310,7 @@ func TestFlushIdle(t *testing.T) {
 
 	wantFlows[firstFlowKey] = &firstFlowRecord
 
-	tests := []struct {
-		name               string
-		ctx                context.Context
-		wantFlows          map[FlowKey]*FlowRecord
-		wantRemainingFlows int
-	}{
+	tests := []flushTestCase{
 		{name: "valid", ctx: ctx, wantFlows: wantFlows, wantRemainingFlows: 1},
 		{name: "cancelledCtx", ctx: cancelledCtx, wantFlows: cancelledCtxWantFlows, wantRemainingFlows: 2},
 	}
@@ -320,73 +321,16 @@ func TestFlushIdle(t *testing.T) {
 			f.flows[firstFlowKey] = &firstFlowRecord
 			f.flows[secondFlowKey] = &secondFlowRecord
 
-			recordSlice := []FlowRecord{}
-			correctFlowsFlushed := make(map[FlowKey]bool)
-			for key := range tt.wantFlows {
-				correctFlowsFlushed[key] = false
-			}
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				f.flushIdle(tt.ctx)
-			}()
-
-			for i := 0; i < len(tt.wantFlows); i++ {
-				select {
-				case record := <-f.Flushed():
-					recordSlice = append(recordSlice, record)
-				case <-time.After(time.Second):
-					t.Fatal("timed out waiting for flushed record")
-				}
-			}
-
-			wg.Wait()
-
-			for _, record := range recordSlice {
-				if tt.wantFlows[record.FlowKey] == nil {
-					t.Error("FlowKey does not exist in expected flows")
-					continue
-				}
-
-				if record.byteCount != tt.wantFlows[record.FlowKey].byteCount {
-					t.Errorf("got flow record byte count %#x, want flow record byte count %#x", record.byteCount, tt.wantFlows[record.FlowKey].byteCount)
-				}
-
-				if record.packetCount != tt.wantFlows[record.FlowKey].packetCount {
-					t.Errorf("got flow record packet count %#x, want flow record packet count %#x", record.packetCount, tt.wantFlows[record.FlowKey].packetCount)
-				}
-
-				if record.firstSeen != tt.wantFlows[record.FlowKey].firstSeen {
-					t.Errorf("got flow record first seen %v, want flow record first seen %v", record.firstSeen, tt.wantFlows[record.FlowKey].firstSeen)
-				}
-
-				if record.lastSeen != tt.wantFlows[record.FlowKey].lastSeen {
-					t.Errorf("got flow record last seen %v, want flow record last seen %v", record.lastSeen, tt.wantFlows[record.FlowKey].lastSeen)
-				}
-
-				if _, ok := tt.wantFlows[record.FlowKey]; ok {
-					correctFlowsFlushed[record.FlowKey] = true
-				}
-			}
-
-			for _, foundFlowKey := range correctFlowsFlushed {
-				if foundFlowKey == false {
-					t.Errorf("flow key never got flushed")
-				}
-			}
-
-			if len(f.flows) != tt.wantRemainingFlows {
-				t.Errorf("got flow length %#x, want flow length %#x", len(f.flows), tt.wantRemainingFlows)
-			}
+			runFlushTest(t, f, tt, f.flushIdle)
 		})
 	}
 }
 
-func TestRun(t *testing.T) {
+func TestRunExits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	channelCloseCtx, _ := context.WithCancel(context.Background())
+	channelCloseCtx, channelCloseCancel := context.WithCancel(context.Background())
+
+	defer channelCloseCancel()
 
 	pkt, flowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
 
@@ -450,4 +394,82 @@ func TestRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunContinuesBadPacket(t *testing.T) {
+	ctx := context.Background()
+
+	pkt, flowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
+	secondPkt := pkt
+	secondPkt.srcIP = net.IP{0xc0, 0xa8}
+
+	source := make(chan PacketSource)
+
+	t.Run("badPacket", func(t *testing.T) {
+		f := New()
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f.Run(ctx, source)
+		}()
+
+		source <- secondPkt
+		source <- pkt
+
+		close(source)
+
+		record := <-f.Flushed()
+
+		wg.Wait()
+
+		if record.FlowKey != flowKey {
+			t.Error("flow keys don't match")
+		}
+
+		if len(f.flows) != 0 {
+			t.Error("flushAll did not flush add flows correctly")
+		}
+	})
+}
+
+func TestRunContinuesTicker(t *testing.T) {
+	ctx := context.Background()
+
+	pkt, flowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
+	pkt.timestamp = pkt.timestamp.Add(-65 * time.Second)
+
+	source := make(chan PacketSource)
+
+	t.Run("tickerTest", func(t *testing.T) {
+		f := New()
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f.Run(ctx, source)
+		}()
+
+		source <- pkt
+
+		select {
+		case record := <-f.Flushed():
+			if record.FlowKey != flowKey {
+				t.Error("flow keys don't match")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for flushed record")
+		}
+
+		close(source)
+
+		if _, ok := <-f.Flushed(); ok {
+			t.Error("flushed did not close correctly")
+		}
+
+		wg.Wait()
+
+	})
 }
