@@ -46,6 +46,34 @@ type FlowRecord struct {
 	lastSeen    time.Time
 }
 
+// SrcIP returns the flow's source IP address.
+func (fr FlowRecord) SrcIP() netip.Addr { return fr.FlowKey.srcIP }
+
+// DstIP returns the flow's destination IP address.
+func (fr FlowRecord) DstIP() netip.Addr { return fr.FlowKey.dstIP }
+
+// SrcPort returns the flow's source port.
+func (fr FlowRecord) SrcPort() uint16 { return fr.FlowKey.srcPort }
+
+// DstPort returns the flow's destination port.
+func (fr FlowRecord) DstPort() uint16 { return fr.FlowKey.dstPort }
+
+// Protocol returns the flow's IP protocol number (e.g. 6 for TCP, 17 for UDP).
+func (fr FlowRecord) Protocol() uint8 { return fr.FlowKey.protocol }
+
+// ByteCount returns the total number of bytes observed across all packets in
+// the flow.
+func (fr FlowRecord) ByteCount() int { return fr.byteCount }
+
+// PacketCount returns the total number of packets observed in the flow.
+func (fr FlowRecord) PacketCount() int { return fr.packetCount }
+
+// FirstSeen returns the time the flow's first packet was observed.
+func (fr FlowRecord) FirstSeen() time.Time { return fr.firstSeen }
+
+// LastSeen returns the time the flow's most recently observed packet arrived.
+func (fr FlowRecord) LastSeen() time.Time { return fr.lastSeen }
+
 // Flow aggregates packets into FlowRecords, keyed by FlowKey, and flushes
 // them to the channel returned by Flushed once a flow has been idle past the
 // timeout or Run is shutting down.
