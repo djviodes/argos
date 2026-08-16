@@ -386,19 +386,22 @@ func TestFlushIdle(t *testing.T) {
 
 func TestRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	channelCloseCtx, _ := context.WithCancel(context.Background())
 
 	pkt, flowKey := newFakePacketAndKey(t, net.IP{0xc0, 0xa8, 0x01, 0x0a})
 
 	source := make(chan PacketSource)
+	channelCloseSource := make(chan PacketSource)
 
 	tests := []struct {
 		name               string
 		ctx                context.Context
-		ctxCancel          context.CancelFunc
+		triggerShutdown    func()
 		source             chan PacketSource
 		wantRemainingFlows int
 	}{
-		{name: "cancelledCtx", ctx: ctx, ctxCancel: cancel, source: source, wantRemainingFlows: 0},
+		{name: "cancelledCtx", ctx: ctx, triggerShutdown: cancel, source: source, wantRemainingFlows: 0},
+		{name: "channelClose", ctx: channelCloseCtx, triggerShutdown: func() { close(channelCloseSource) }, source: channelCloseSource, wantRemainingFlows: 0},
 	}
 
 	for _, tt := range tests {
@@ -413,7 +416,7 @@ func TestRun(t *testing.T) {
 			}()
 
 			tt.source <- pkt
-			tt.ctxCancel()
+			tt.triggerShutdown()
 			record := <-f.Flushed()
 
 			wg.Wait()
