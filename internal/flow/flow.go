@@ -74,6 +74,7 @@ func (f *Flow) Flushed() <-chan FlowRecord { return f.flushed }
 // Flushed.
 func (f *Flow) Run(ctx context.Context, source <-chan PacketSource) error {
 	const tickInterval = 1 * time.Second
+	const drainTimeout = 5 * time.Second
 	ticker := time.NewTicker(tickInterval)
 
 	defer ticker.Stop()
@@ -82,12 +83,16 @@ func (f *Flow) Run(ctx context.Context, source <-chan PacketSource) error {
 	for {
 		select {
 		case <-ctx.Done():
-			f.flushAll(ctx)
+			drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+			defer cancel()
+			f.flushAll(drainCtx)
 
 			return nil
 		case pkt, ok := <-source:
 			if !ok {
-				f.flushAll(ctx)
+				drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+				defer cancel()
+				f.flushAll(drainCtx)
 
 				return nil
 			}

@@ -442,7 +442,7 @@ func TestRun(t *testing.T) {
 				t.Error("flushAll did not flush add flows correctly")
 			}
 
-			if _, ok := <-f.Flushed(); !ok {
+			if _, ok := <-f.Flushed(); ok {
 				t.Error("flushed did not close correctly")
 			}
 		})
