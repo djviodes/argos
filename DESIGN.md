@@ -193,6 +193,20 @@ recorded here so the reasoning behind the deferral isn't lost:
   decouples "identify what's idle" (fast, sequential) from "wait for someone to receive it"
   (potentially slow, now parallelized). Deferred because it adds real concurrency complexity for a
   benefit that only matters at a scale this project isn't at yet.
+- **`kafka`'s message serialization becomes Protobuf**: flow records are currently serialized to
+  JSON for the message `Value` — no schema enforcement, but no extra tooling or infrastructure
+  either (no `protoc` compiler, no schema registry). Protobuf would enforce the producer/consumer
+  contract at compile time and reduce message size, at the cost of a `.proto` schema and generated
+  Go code. Deferred deliberately rather than for scope reasons: Protobuf is a real, separate skill
+  worth dedicated hands-on practice once the MVP pipeline is functional end-to-end, not something
+  to pick up as a side effect of getting `kafka` working for the first time.
+- **Formal integration test suite for `kafka` against a real broker**: `kafka`'s automated tests
+  use fakes (per the Type ownership pattern above), needing no Docker or live broker to run — but
+  the package is manually verified against the local Docker Kafka instance at least once before
+  being considered functional, since fake-based tests only prove `kafka`'s own logic is internally
+  consistent, not that it actually publishes successfully against a real broker. A repeatable,
+  automated integration suite exercising the real `kafka-go` `Writer` is deferred, consistent with
+  keeping this project's Kafka-specific scope narrow for now (see the Protobuf entry above).
 
 Still open, to be filled in as real decisions are made:
 
