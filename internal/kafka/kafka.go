@@ -28,9 +28,14 @@ type FlowSource interface {
 	LastSeen() time.Time
 }
 
+type messageWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafkago.Message) error
+	Close() error
+}
+
 // Kafka publishes flow records to a Kafka topic.
 type Kafka struct {
-	writer *kafkago.Writer
+	writer messageWriter
 }
 
 type flowMessage struct {
