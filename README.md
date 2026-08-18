@@ -4,7 +4,8 @@ A Go-based network traffic monitor built for hands-on learning in raw sockets, p
 
 ## Status
 
-Early development. Core capture, parsing, and flow aggregation logic is being built incrementally.
+Early development. Capture, flow aggregation, and Kafka publishing are implemented and tested;
+PostgreSQL storage and `cmd/argos` pipeline wiring are not yet built.
 
 ## Requirements
 
@@ -19,7 +20,7 @@ Early development. Core capture, parsing, and flow aggregation logic is being bu
 /cmd/argos            — main package; wires stages together, owns startup/shutdown
 /internal/capture     — raw socket / packet capture logic
 /internal/flow        — flow aggregation (source, dest, byte count, duration)
-/internal/kafka       — producer/consumer integration
+/internal/kafka       — publishes flow records to a Kafka topic
 /internal/storage     — PostgreSQL persistence layer
 ```
 
@@ -27,7 +28,16 @@ See [DESIGN.md](DESIGN.md) for package boundaries, type ownership, and shutdown/
 
 ## Running locally
 
-Setup instructions to be added as the project takes shape.
+The full pipeline (`cmd/argos`) isn't wired up yet. To exercise Kafka publishing on its own:
+
+```
+docker compose up -d
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --create \
+	--topic some-topic --bootstrap-server localhost:9092
+go run ./cmd/kafkasmoke
+```
+
+See [cmd/kafkasmoke](cmd/kafkasmoke/main.go) for details.
 
 ## License
 

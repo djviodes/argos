@@ -121,22 +121,29 @@ if err != nil {
     return err
 }
 flowAgg := flow.New()
+kafkaWriter, err := kafka.New(brokerAddr, topic)
+if err != nil {
+    return err
+}
 
 g, ctx := errgroup.WithContext(ctx)
 g.Go(func() error { return cap.Run(ctx) })
 g.Go(func() error { return flowAgg.Run(ctx, bridgePackets(cap.Packets())) })
-g.Go(func() error { return kafka.Run(ctx) })
+g.Go(func() error { return kafkaWriter.Run(ctx, bridgeFlows(flowAgg.Flushed())) })
 g.Go(func() error { return storage.Run(ctx) })
 
 return g.Wait()
 ```
 
-`bridgePackets` is a small adapter `cmd/argos` owns: it ranges over `cap.Packets()` (`<-chan
-capture.Packet`) and re-sends each value onto a `chan flow.PacketSource`. This isn't optional
-boilerplate — Go's channel types are invariant, so a `<-chan capture.Packet` can't be passed
-directly where a `<-chan flow.PacketSource` is expected, even though `capture.Packet` satisfies
-that interface. `cmd/argos` is the one place allowed to know about both concrete types, so the
-bridging belongs there, keeping `flow` free of any import from `capture`.
+`bridgePackets` and `bridgeFlows` are small adapters `cmd/argos` owns: each ranges over a
+producer's output channel of a concrete type (`<-chan capture.Packet`, `<-chan flow.FlowRecord`)
+and re-sends each value onto a channel of the consumer's interface type (`chan flow.PacketSource`,
+`chan kafka.FlowSource`). This isn't optional boilerplate — Go's channel types are invariant, so a
+`<-chan capture.Packet` can't be passed directly where a `<-chan flow.PacketSource` is expected,
+even though `capture.Packet` satisfies that interface (and likewise for `flow.FlowRecord` and
+`kafka.FlowSource`). `cmd/argos` is the one place allowed to know about both concrete types at
+each boundary, so the bridging belongs there, keeping each stage free of any import from its
+upstream neighbor.
 
 - A single root `context.Context`, cancelled on `SIGINT`/`SIGTERM`, is threaded through every
   stage.
@@ -174,6 +181,16 @@ bridging belongs there, keeping `flow` free of any import from `capture`.
   periodic ticker inside `Flow.Run` rather than a per-flow timer. An active timeout (force-flushing
   a flow that's still receiving traffic after some maximum duration) was considered but deferred —
   idle-only covers the common case without the extra bookkeeping an active timeout would add.
+- **Kafka message design**: each flow record is serialized to JSON for the message `Value` (see
+  Post-MVP for the Protobuf deferral), with the `Key` built from the flow's 5-tuple and `Time` set
+  to the flow's `LastSeen` rather than publish time — when the flow was actually observed is more
+  meaningful downstream than when it happened to reach Kafka. The `Writer`'s `Balancer` is `Hash`
+  rather than the default `LeastBytes`, so every message for a given flow key routes to the same
+  partition, preserving per-flow ordering — `LeastBytes` ignores the key entirely and wouldn't
+  guarantee that. A `WriteMessages` failure is treated as fatal, propagating up through `Run` and
+  cascading a shutdown via `errgroup`, since it almost always signals a broken connection to the
+  broker rather than a bad record — record-level problems (JSON serialization failures) are a
+  separate, earlier failure mode already handled before `WriteMessages` is ever called.
 
 ## Post-MVP
 
@@ -201,12 +218,13 @@ recorded here so the reasoning behind the deferral isn't lost:
   worth dedicated hands-on practice once the MVP pipeline is functional end-to-end, not something
   to pick up as a side effect of getting `kafka` working for the first time.
 - **Formal integration test suite for `kafka` against a real broker**: `kafka`'s automated tests
-  use fakes (per the Type ownership pattern above), needing no Docker or live broker to run — but
-  the package is manually verified against the local Docker Kafka instance at least once before
-  being considered functional, since fake-based tests only prove `kafka`'s own logic is internally
-  consistent, not that it actually publishes successfully against a real broker. A repeatable,
-  automated integration suite exercising the real `kafka-go` `Writer` is deferred, consistent with
-  keeping this project's Kafka-specific scope narrow for now (see the Protobuf entry above).
+  use fakes (per the Type ownership pattern above), needing no Docker or live broker to run. Since
+  fake-based tests only prove `kafka`'s own logic is internally consistent, not that it actually
+  publishes successfully against a real broker, `kafka` was manually verified against a local
+  Docker Kafka instance (via `docker-compose.yml` and `cmd/kafkasmoke`) before being considered
+  functional. A repeatable, automated integration suite exercising the real `kafka-go` `Writer` is
+  still deferred, consistent with keeping this project's Kafka-specific scope narrow for now (see
+  the Protobuf entry above).
 
 Still open, to be filled in as real decisions are made:
 
