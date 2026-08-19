@@ -310,5 +310,39 @@ func TestRunDrainsPendingRecord(t *testing.T) {
 }
 
 func TestRunDrainTimeout(t *testing.T) {
+	t.Run("returnsAfterDrainTimeout", func(t *testing.T) {
+		start := time.Now()
+		source := make(chan FlowSource)
+		fakeWriter := &fakeMessageWriter{}
+		k := &Kafka{writer: fakeWriter}
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
 
+		go func() {
+			errCh <- k.Run(ctx, source)
+		}()
+
+		cancel()
+
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("err returned: %v", err)
+			}
+		case <-time.After(7 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if elapsed := time.Since(start); elapsed < 4900*time.Millisecond {
+			t.Errorf("elapsed time is less than the required 5 seconds")
+		}
+
+		if len(fakeWriter.messages) != 0 {
+			t.Errorf("got message count %d, want message count 0", len(fakeWriter.messages))
+		}
+
+		if !fakeWriter.closed {
+			t.Error("expected fakeWriter to be closed")
+		}
+	})
 }
