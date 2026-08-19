@@ -271,7 +271,42 @@ func TestRunPublishFailure(t *testing.T) {
 }
 
 func TestRunDrainsPendingRecord(t *testing.T) {
+	t.Run("pendingRecordPublished", func(t *testing.T) {
+		source := make(chan FlowSource)
+		fakeWriter := &fakeMessageWriter{}
+		k := &Kafka{writer: fakeWriter}
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
 
+		go func() {
+			errCh <- k.Run(ctx, source)
+		}()
+
+		cancel()
+
+		time.Sleep(10 * time.Millisecond)
+
+		source <- newFakeFlowSource(t, netip.AddrFrom4([4]byte{0xc0, 0xa8, 0x01, 0x0a}))
+
+		close(source)
+
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("err returned: %v", err)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if len(fakeWriter.messages) != 1 {
+			t.Errorf("got message count %d, want message count 1", len(fakeWriter.messages))
+		}
+
+		if !fakeWriter.closed {
+			t.Error("expected fakeWriter to be closed")
+		}
+	})
 }
 
 func TestRunDrainTimeout(t *testing.T) {
