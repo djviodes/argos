@@ -194,7 +194,51 @@ func TestPublish(t *testing.T) {
 }
 
 func TestRunSourceCloses(t *testing.T) {
+	tests := []struct {
+		name             string
+		sendFlow         bool
+		wantMessageCount int
+	}{
+		{name: "noRecordsSent", sendFlow: false, wantMessageCount: 0},
+		{name: "oneRecordSent", sendFlow: true, wantMessageCount: 1},
+	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := make(chan FlowSource)
+			fakeWriter := &fakeMessageWriter{}
+			k := &Kafka{writer: fakeWriter}
+
+			errCh := make(chan error, 1)
+
+			go func() {
+				errCh <- k.Run(context.Background(), source)
+			}()
+
+			if tt.sendFlow {
+				source <- newFakeFlowSource(t, netip.AddrFrom4([4]byte{0xc0, 0xa8, 0x01, 0x0a}))
+			}
+
+			close(source)
+
+			select {
+			case err := <-errCh:
+				if err != nil {
+					t.Errorf("err returned: %v", err)
+				}
+			case <-time.After(1 * time.Second):
+				t.Fatal("Run did not return")
+			}
+
+			if len(fakeWriter.messages) != tt.wantMessageCount {
+				t.Errorf("got message count %d, want message count %d", len(fakeWriter.messages), tt.wantMessageCount)
+			}
+
+			if !fakeWriter.closed {
+				t.Error("message writer failed to close properly")
+			}
+		})
+	}
 }
 
 func TestRunPublishFailure(t *testing.T) {
