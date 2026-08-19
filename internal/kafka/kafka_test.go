@@ -242,7 +242,32 @@ func TestRunSourceCloses(t *testing.T) {
 }
 
 func TestRunPublishFailure(t *testing.T) {
+	t.Run("duringNormalOperation", func(t *testing.T) {
+		source := make(chan FlowSource)
+		fakeWriter := &fakeMessageWriter{err: errFakeWrite}
+		k := &Kafka{writer: fakeWriter}
 
+		errCh := make(chan error, 1)
+
+		go func() {
+			errCh <- k.Run(context.Background(), source)
+		}()
+
+		source <- newFakeFlowSource(t, netip.AddrFrom4([4]byte{0xc0, 0xa8, 0x01, 0x0a}))
+
+		select {
+		case err := <-errCh:
+			if !errors.Is(err, errFakeWrite) {
+				t.Errorf("got error %v, want error %v", err, errFakeWrite)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if !fakeWriter.closed {
+			t.Error("expected fakeWriter to be closed")
+		}
+	})
 }
 
 func TestRunDrainsPendingRecord(t *testing.T) {
