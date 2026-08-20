@@ -406,9 +406,79 @@ func TestRunExecExceedsRetryLimit(t *testing.T) {
 }
 
 func TestRunExecRetryCtxCancelled(t *testing.T) {
+	t.Run("cancelledDuringBackoff", func(t *testing.T) {
+		_, value := newTestMessageBytes(t)
+		fakeReader := &fakeKafkaReader{messages: make(chan kafkago.Message)}
+		fakePGWriter := &fakePostgresWriter{failCount: 10}
+		s := &Storage{kafkaReader: fakeReader, postgresWriter: fakePGWriter}
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
 
+		go func() {
+			errCh <- s.Run(ctx)
+		}()
+
+		fakeReader.messages <- kafkago.Message{Value: value}
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("expected nil err but got %v", err)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if fakePGWriter.calls != 1 {
+			t.Errorf("got postgres writer calls %d, want postgres writer calls 1", fakePGWriter.calls)
+		}
+
+		if len(fakeReader.commitCalls) != 0 {
+			t.Errorf("got reader commit calls %d, want reader commit calls 0", len(fakeReader.commitCalls))
+		}
+
+		if !fakeReader.closed {
+			t.Error("expected fakeReader to be closed")
+		}
+	})
 }
 
 func TestRunCommitError(t *testing.T) {
+	t.Run("commitFails", func(t *testing.T) {
+		_, value := newTestMessageBytes(t)
+		fakeReader := &fakeKafkaReader{messages: make(chan kafkago.Message), commitErr: errFakeCommit}
+		fakePGWriter := &fakePostgresWriter{}
+		s := &Storage{kafkaReader: fakeReader, postgresWriter: fakePGWriter}
+		ctx := context.Background()
+		errCh := make(chan error, 1)
 
+		go func() {
+			errCh <- s.Run(ctx)
+		}()
+
+		fakeReader.messages <- kafkago.Message{Value: value}
+
+		select {
+		case err := <-errCh:
+			if !errors.Is(err, errFakeCommit) {
+				t.Errorf("got error %v, want error %v", err, errFakeCommit)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if fakePGWriter.calls != 1 {
+			t.Errorf("got postgres writer calls %d, want postgres writer calls 1", fakePGWriter.calls)
+		}
+
+		if len(fakeReader.commitCalls) != 1 {
+			t.Errorf("got reader commit calls %d, want reader commit calls 1", len(fakeReader.commitCalls))
+		}
+
+		if !fakeReader.closed {
+			t.Error("expected fakeReader to be closed")
+		}
+	})
 }
