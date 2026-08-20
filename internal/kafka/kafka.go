@@ -131,7 +131,6 @@ func (k *Kafka) publish(ctx context.Context, flow FlowSource) error {
 	}
 
 	value, err := json.Marshal(msg)
-
 	if err != nil {
 		return fmt.Errorf("serializing kafka message: %w", err)
 	}

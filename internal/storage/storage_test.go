@@ -43,8 +43,10 @@ func (k *fakeKafkaReader) CommitMessages(ctx context.Context, msgs ...kafkago.Me
 }
 func (k *fakeKafkaReader) Close() error { k.closed = true; return nil }
 
-var errFakeFetch = errors.New("fetching messages failed")
-var errFakeCommit = errors.New("committing messages failed")
+var (
+	errFakeFetch  = errors.New("fetching messages failed")
+	errFakeCommit = errors.New("committing messages failed")
+)
 
 type fakePostgresWriter struct {
 	failCount    int
@@ -69,6 +71,27 @@ func (p *fakePostgresWriter) Exec(ctx context.Context, sql string, args ...any) 
 }
 
 var errFakeExec = errors.New("executing messages failed")
+
+func newTestMessageBytes(t *testing.T) (kafkaMessage, []byte) {
+	msg := kafkaMessage{
+		SrcIP:       netip.AddrFrom4([4]byte{0xc0, 0xa8, 0x01, 0x0a}),
+		DstIP:       netip.AddrFrom4([4]byte{0x5d, 0xb8, 0xd8, 0x22}),
+		SrcPort:     0xd431,
+		DstPort:     0x01bb,
+		Protocol:    0x06,
+		ByteCount:   1500,
+		PacketCount: 1,
+		FirstSeen:   time.Now().Add(-5 * time.Second),
+		LastSeen:    time.Now(),
+	}
+
+	value, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("serializing kafka message: %v", err)
+	}
+
+	return msg, value
+}
 
 func TestNew(t *testing.T) {
 	const pgConnString = "postgres://user:pass@localhost:5432/db"
@@ -223,22 +246,7 @@ func TestRunUnmarshalFailure(t *testing.T) {
 
 func TestRunPersistsRecord(t *testing.T) {
 	t.Run("validRecord", func(t *testing.T) {
-		msg := kafkaMessage{
-			SrcIP:       netip.AddrFrom4([4]byte{0xc0, 0xa8, 0x01, 0x0a}),
-			DstIP:       netip.AddrFrom4([4]byte{0x5d, 0xb8, 0xd8, 0x22}),
-			SrcPort:     0xd431,
-			DstPort:     0x01bb,
-			Protocol:    0x06,
-			ByteCount:   1500,
-			PacketCount: 1,
-			FirstSeen:   time.Now().Add(-5 * time.Second),
-			LastSeen:    time.Now(),
-		}
-
-		value, err := json.Marshal(msg)
-		if err != nil {
-			t.Fatalf("serializing kafka message: %v", err)
-		}
+		msg, value := newTestMessageBytes(t)
 
 		fakeReader := &fakeKafkaReader{messages: make(chan kafkago.Message)}
 		fakePGWriter := &fakePostgresWriter{}
@@ -318,11 +326,83 @@ func TestRunPersistsRecord(t *testing.T) {
 }
 
 func TestRunExecRetriesThenSucceeds(t *testing.T) {
+	t.Run("retriesOnceThenSucceeds", func(t *testing.T) {
+		_, value := newTestMessageBytes(t)
 
+		fakeReader := &fakeKafkaReader{messages: make(chan kafkago.Message)}
+		fakePGWriter := &fakePostgresWriter{failCount: 1}
+		s := &Storage{kafkaReader: fakeReader, postgresWriter: fakePGWriter}
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+
+		go func() {
+			errCh <- s.Run(ctx)
+		}()
+
+		fakeReader.messages <- kafkago.Message{Value: value}
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("expected nil err but got %v", err)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if fakePGWriter.calls != 2 {
+			t.Errorf("got writer call count %d, want writer call count 2", fakePGWriter.calls)
+		}
+
+		if len(fakeReader.commitCalls) != 1 {
+			t.Errorf("got reader commit calls %d, want reader commit calls 1", len(fakeReader.commitCalls))
+		}
+
+		if !fakeReader.closed {
+			t.Error("expected fakeReader to be closed")
+		}
+	})
 }
 
 func TestRunExecExceedsRetryLimit(t *testing.T) {
+	t.Run("exceedsRetryLimit", func(t *testing.T) {
+		_, value := newTestMessageBytes(t)
 
+		fakeReader := &fakeKafkaReader{messages: make(chan kafkago.Message)}
+		fakePGWriter := &fakePostgresWriter{failCount: 10}
+		s := &Storage{kafkaReader: fakeReader, postgresWriter: fakePGWriter}
+		ctx := context.Background()
+		errCh := make(chan error, 1)
+
+		go func() {
+			errCh <- s.Run(ctx)
+		}()
+
+		fakeReader.messages <- kafkago.Message{Value: value}
+
+		select {
+		case err := <-errCh:
+			if !errors.Is(err, errFakeExec) {
+				t.Errorf("got error %v, want error %v", err, errFakeExec)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if fakePGWriter.calls != 5 {
+			t.Errorf("got postgres writer calls %d, want postgres writer calls 5", fakePGWriter.calls)
+		}
+
+		if len(fakeReader.commitCalls) != 0 {
+			t.Errorf("got reader commit calls %d, want reader commit calls 0", len(fakeReader.commitCalls))
+		}
+
+		if !fakeReader.closed {
+			t.Error("expected fakeReader to be closed")
+		}
+	})
 }
 
 func TestRunExecRetryCtxCancelled(t *testing.T) {
