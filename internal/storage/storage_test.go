@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	kafkago "github.com/segmentio/kafka-go"
@@ -106,4 +107,100 @@ func TestNew(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunFetchError(t *testing.T) {
+	t.Run("duringNormalOperation", func(t *testing.T) {
+		fakeReader := &fakeKafkaReader{fetchErr: errFakeFetch}
+		fakePGWriter := &fakePostgresWriter{}
+		s := &Storage{kafkaReader: fakeReader, postgresWriter: fakePGWriter}
+		ctx := context.Background()
+		errCh := make(chan error, 1)
+
+		go func() {
+			errCh <- s.Run(ctx)
+		}()
+
+		select {
+		case err := <-errCh:
+			if !errors.Is(err, errFakeFetch) {
+				t.Errorf("got error %v, want error %v", err, errFakeFetch)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if !fakeReader.closed {
+			t.Error("expected fakeReader to be closed")
+		}
+
+		if fakePGWriter.calls != 0 {
+			t.Errorf("got postgres writer calls %d, want postgres writer calls 0", fakePGWriter.calls)
+		}
+
+		if len(fakeReader.commitCalls) != 0 {
+			t.Errorf("got reader commit calls %d, want reader commit calls 0", len(fakeReader.commitCalls))
+		}
+	})
+}
+
+func TestRunCtxCancelledWhileFetching(t *testing.T) {
+	t.Run("cancelledDuringFetch", func(t *testing.T) {
+		fakeReader := &fakeKafkaReader{}
+		fakePGWriter := &fakePostgresWriter{}
+		s := &Storage{kafkaReader: fakeReader, postgresWriter: fakePGWriter}
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+
+		go func() {
+			errCh <- s.Run(ctx)
+		}()
+
+		cancel()
+
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("expected nil err but got %v", err)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Run did not return")
+		}
+
+		if !fakeReader.closed {
+			t.Error("expected fakeReader to be closed")
+		}
+
+		if fakePGWriter.calls != 0 {
+			t.Errorf("got postgres writer calls %d, want postgres writer calls 0", fakePGWriter.calls)
+		}
+
+		if len(fakeReader.commitCalls) != 0 {
+			t.Errorf("got reader commit calls %d, want reader commit calls 0", len(fakeReader.commitCalls))
+		}
+	})
+}
+
+func TestRunUnmarshalFailure(t *testing.T) {
+
+}
+
+func TestRunPersistsRecord(t *testing.T) {
+
+}
+
+func TestRunExecRetriesThenSucceeds(t *testing.T) {
+
+}
+
+func TestRunExecExceedsRetryLimit(t *testing.T) {
+
+}
+
+func TestRunExecRetryCtxCancelled(t *testing.T) {
+
+}
+
+func TestRunCommitError(t *testing.T) {
+
 }
