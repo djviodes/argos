@@ -108,10 +108,9 @@ This keeps the dependency graph one-directional (`cmd/argos` → each stage; no 
 another stage's package) and makes each stage independently testable — `flow` can be tested with
 fake packets and never needs raw-socket / root privileges, `kafka` can be tested with fake flow
 records and never needs a running Kafka broker. `storage`'s testing story is different in shape:
-its automated tests (still pending) fake the Kafka reader and the Postgres writer it depends on,
-rather than faking a flow record — it was manually verified against a real broker and a real
-Postgres instance first (`cmd/storagesmoke`), the same way `kafka` was before its automated suite
-existed.
+its automated tests fake the Kafka reader and the Postgres writer it depends on, rather than
+faking a flow record — it was manually verified against a real broker and a real Postgres
+instance first (`cmd/storagesmoke`), the same way `kafka` was before its automated suite existed.
 
 ## Lifecycle and shutdown
 

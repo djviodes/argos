@@ -4,10 +4,10 @@ A Go-based network traffic monitor built for hands-on learning in raw sockets, p
 
 ## Status
 
-Early development. Capture, flow aggregation, and Kafka publishing are implemented and tested.
-PostgreSQL storage is implemented and manually verified against a real broker and database
-(`cmd/storagesmoke`); its automated test suite is still pending. `cmd/argos` pipeline wiring is
-not yet built.
+Early development. Capture, flow aggregation, Kafka publishing, and PostgreSQL storage are all
+implemented and tested — each with an automated fake-based test suite, plus manual verification
+against real infrastructure (`cmd/kafkasmoke`, `cmd/storagesmoke`). `cmd/argos` pipeline wiring,
+the last piece before the MVP is complete, is not yet built.
 
 ## Requirements
 
