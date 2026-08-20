@@ -197,6 +197,22 @@ upstream neighbor.
 Decisions made now that intentionally defer real work until after the MVP is functional,
 recorded here so the reasoning behind the deferral isn't lost:
 
+- **`storage`'s dead letter queue for records that fail to persist** (highest priority of the
+  items below — first thing tackled post-MVP, ahead of the rest of this list): `storage`'s insert
+  path retries a record that fails to persist, without committing its Kafka offset, so a transient
+  failure resolves itself on the next attempt and a sustained one is retried again after a restart
+  rather than silently dropped. After 5 consecutive failures, `storage` treats this as fatal rather
+  than retrying forever. The planned fix for what happens to that record: publish it to a separate
+  `flow-records-dlq` Kafka topic for later inspection or manual replay, before giving up. A
+  Postgres table holding the same information was considered and rejected — the realistic trigger
+  for 5 consecutive failures is a sustained Postgres outage, not one malformed record, and in that
+  scenario a dead-letter *table* is useless, since it shares Postgres's own failure domain: if the
+  database is unreachable, writing the failure record to any table in it fails too. A Kafka topic
+  doesn't share that failure domain. Deferred for now (new producer path, new topic, and message
+  shape all need designing) but prioritized above the other Post-MVP items below because it closes
+  a real data-loss/observability gap, not a performance or tooling-maturity gap like the rest of
+  this list — until it's built, a sustained Postgres outage crash-loops `storage` with no record of
+  what failed beyond the logs.
 - **IPv6 (and other protocols) support**: the project is IPv4-only for now (see Non-goals), but
   `flow.FlowKey` already uses `netip.Addr` rather than `net.IP` specifically so this transition is
   painless later — `netip.Addr` represents IPv4 and IPv6 uniformly, so `FlowKey`'s shape won't

@@ -143,7 +143,6 @@ func (k *Kafka) publish(ctx context.Context, flow FlowSource) error {
 			Time:  flow.LastSeen(),
 		},
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to write messages: %w", err)
 	}
