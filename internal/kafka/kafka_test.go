@@ -52,11 +52,7 @@ func (m *fakeMessageWriter) WriteMessages(ctx context.Context, msgs ...kafkago.M
 	return nil
 }
 
-func (m *fakeMessageWriter) Close() error {
-	m.closed = true
-
-	return nil
-}
+func (m *fakeMessageWriter) Close() error { m.closed = true; return nil }
 
 func newFakeFlowSource(t *testing.T, srcIP netip.Addr) fakeFlowSource {
 	t.Helper()
@@ -83,8 +79,8 @@ func TestNew(t *testing.T) {
 		topic      string
 		wantErr    bool
 	}{
-		{name: "valid", brokerAddr: "localhost:9092", topic: "some-topic"},
-		{name: "emptyBrokerAddr", topic: "some-topic", wantErr: true},
+		{name: "valid", brokerAddr: "localhost:9092", topic: "flow-records"},
+		{name: "emptyBrokerAddr", topic: "flow-records", wantErr: true},
 		{name: "emptyTopic", brokerAddr: "localhost:9092", wantErr: true},
 	}
 
