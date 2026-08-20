@@ -5,13 +5,13 @@
 //
 //	docker compose up -d
 //	docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --create \
-//		--topic some-topic --bootstrap-server localhost:9092
+//		--topic flow-records --bootstrap-server localhost:9092
 //
 // Then run this program and confirm the record landed on the topic:
 //
 //	go run ./cmd/kafkasmoke
 //	docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-//		--topic some-topic --bootstrap-server localhost:9092 --from-beginning
+//		--topic flow-records --bootstrap-server localhost:9092 --from-beginning
 package main
 
 import (
@@ -62,7 +62,7 @@ func main() {
 	}
 
 	broker := "localhost:9092"
-	topic := "some-topic"
+	topic := "flow-records"
 
 	kafkaWriter, err := kafka.New(broker, topic)
 	if err != nil {

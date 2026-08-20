@@ -3,6 +3,8 @@
 
 # Build output
 /argos
+/kafkasmoke
+/storagesmoke
 *.exe
 *.test
 
