@@ -73,9 +73,12 @@ describing what it needs from a flow record.
 
 ### storage
 
-Consumes flow records from Kafka and persists them to PostgreSQL, with a schema designed for
-querying by source, destination, time range, and volume. Depends on `flow` only through a small
-interface describing what it needs from a flow record.
+Consumes flow records from a Kafka topic via a consumer group and persists them to PostgreSQL,
+with a schema designed for querying by source, destination, time range, and volume. Unlike
+`flow`'s and `kafka`'s producer/consumer pairs, `storage` doesn't depend on `flow` through a Go
+interface — the boundary here is the Kafka topic itself (JSON bytes on the wire), not an
+in-process channel, so there's no upstream concrete type to avoid importing. `storage` just
+unmarshals into its own private struct.
 
 ## Type ownership and boundaries
 
@@ -97,12 +100,18 @@ type PacketSource interface {
 ```
 
 `capture.Packet` satisfies this interface structurally, with no import from `capture` back to
-`flow`. The same pattern repeats at the `flow → kafka` and `flow → storage` boundaries.
+`flow`. The same pattern repeats at the `flow → kafka` boundary. It stops there, though —
+`kafka → storage` isn't an in-process boundary at all (see the `storage` component description
+above), so there's no equivalent interface for `storage` to define.
 
 This keeps the dependency graph one-directional (`cmd/argos` → each stage; no stage imports
 another stage's package) and makes each stage independently testable — `flow` can be tested with
-fake packets and never needs raw-socket / root privileges, `kafka` and `storage` can be tested
-with fake flow records and never need a running Kafka broker or Postgres instance.
+fake packets and never needs raw-socket / root privileges, `kafka` can be tested with fake flow
+records and never needs a running Kafka broker. `storage`'s testing story is different in shape:
+its automated tests (still pending) fake the Kafka reader and the Postgres writer it depends on,
+rather than faking a flow record — it was manually verified against a real broker and a real
+Postgres instance first (`cmd/storagesmoke`), the same way `kafka` was before its automated suite
+existed.
 
 ## Lifecycle and shutdown
 
@@ -121,7 +130,11 @@ if err != nil {
     return err
 }
 flowAgg := flow.New()
-kafkaWriter, err := kafka.New(brokerAddr, topic)
+kafkaWriter, err := kafka.New(kafkaBrokerAddr, topic)
+if err != nil {
+    return err
+}
+storageConsumer, err := storage.New(ctx, pgConnString, kafkaBrokerAddr, topic, groupID)
 if err != nil {
     return err
 }
@@ -130,7 +143,7 @@ g, ctx := errgroup.WithContext(ctx)
 g.Go(func() error { return cap.Run(ctx) })
 g.Go(func() error { return flowAgg.Run(ctx, bridgePackets(cap.Packets())) })
 g.Go(func() error { return kafkaWriter.Run(ctx, bridgeFlows(flowAgg.Flushed())) })
-g.Go(func() error { return storage.Run(ctx) })
+g.Go(func() error { return storageConsumer.Run(ctx) })
 
 return g.Wait()
 ```
@@ -143,7 +156,9 @@ and re-sends each value onto a channel of the consumer's interface type (`chan f
 even though `capture.Packet` satisfies that interface (and likewise for `flow.FlowRecord` and
 `kafka.FlowSource`). `cmd/argos` is the one place allowed to know about both concrete types at
 each boundary, so the bridging belongs there, keeping each stage free of any import from its
-upstream neighbor.
+upstream neighbor. Notice `storageConsumer.Run` gets no such adapter — it takes no channel
+argument at all, since its upstream is the Kafka topic itself, not another goroutine in this
+process.
 
 - A single root `context.Context`, cancelled on `SIGINT`/`SIGTERM`, is threaded through every
   stage.
@@ -191,6 +206,21 @@ upstream neighbor.
   cascading a shutdown via `errgroup`, since it almost always signals a broken connection to the
   broker rather than a bad record — record-level problems (JSON serialization failures) are a
   separate, earlier failure mode already handled before `WriteMessages` is ever called.
+- **Storage design**: `jackc/pgx/v5` (via `pgxpool`) over `database/sql`+`lib/pq`, chosen for
+  native `inet` support — keeping the same `netip.Addr` symmetry used everywhere else in this
+  project — and because `lib/pq` is in maintenance mode. The primary key is a UUIDv7, not an
+  auto-incrementing integer: at this project's actual single-instance scale the two are equally
+  collision-free, but UUIDv7 avoids ever needing to migrate off a sequential key later, keeps
+  insert locality (unlike a fully random UUID, which would fragment the index), and doesn't expose
+  a guessable sequential ID if this data is ever queried through an API. A `UNIQUE` constraint on
+  the natural key (5-tuple + `first_seen`) plus `ON CONFLICT DO NOTHING` makes inserts idempotent
+  against Kafka's at-least-once redelivery. Kafka offsets are committed manually, only after a
+  successful insert — never auto-committed — so a crash between fetch and persist redelivers the
+  record instead of silently losing it. A failed insert is retried in place with exponential
+  backoff (its offset deliberately left uncommitted during the retries) rather than immediately
+  fatal, since most failures are transient; after 5 consecutive failures on the same record,
+  `storage` gives up and returns the error, on the theory that something is systemically wrong
+  (see the dead letter queue entry below for what should eventually happen to that record).
 
 ## Post-MVP
 
@@ -244,7 +274,6 @@ recorded here so the reasoning behind the deferral isn't lost:
 
 Still open, to be filled in as real decisions are made:
 
-- Flow record schema / Postgres schema design
 - Whether to support multiple interfaces
 
 ## Non-goals (for now)

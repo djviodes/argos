@@ -4,14 +4,16 @@ A Go-based network traffic monitor built for hands-on learning in raw sockets, p
 
 ## Status
 
-Early development. Capture, flow aggregation, and Kafka publishing are implemented and tested;
-PostgreSQL storage and `cmd/argos` pipeline wiring are not yet built.
+Early development. Capture, flow aggregation, and Kafka publishing are implemented and tested.
+PostgreSQL storage is implemented and manually verified against a real broker and database
+(`cmd/storagesmoke`); its automated test suite is still pending. `cmd/argos` pipeline wiring is
+not yet built.
 
 ## Requirements
 
 - Go 1.26+
 - Kafka (local instance via Docker)
-- PostgreSQL
+- PostgreSQL (local instance via Docker)
 - Root/elevated privileges (or `CAP_NET_RAW`) for raw socket packet capture
 
 ## Project Structure
@@ -21,23 +23,31 @@ PostgreSQL storage and `cmd/argos` pipeline wiring are not yet built.
 /internal/capture     — raw socket / packet capture logic
 /internal/flow        — flow aggregation (source, dest, byte count, duration)
 /internal/kafka       — publishes flow records to a Kafka topic
-/internal/storage     — PostgreSQL persistence layer
+/internal/storage     — consumes flow records from Kafka, persists them to PostgreSQL
 ```
 
 See [DESIGN.md](DESIGN.md) for package boundaries, type ownership, and shutdown/lifecycle design.
 
 ## Running locally
 
-The full pipeline (`cmd/argos`) isn't wired up yet. To exercise Kafka publishing on its own:
+The full pipeline (`cmd/argos`) isn't wired up yet, but `kafka` and `storage` can each be
+exercised against real infrastructure on their own.
+
+Copy `.env.example` to `.env` and fill in real values first — `docker-compose.yml` reads
+Postgres's user/password/db/port from it. `POSTGRES_PORT` in particular may need to be something
+other than `5432` if you already have a local Postgres instance using that port.
 
 ```
 docker compose up -d
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --create \
-	--topic some-topic --bootstrap-server localhost:9092
-go run ./cmd/kafkasmoke
+	--topic flow-records --bootstrap-server localhost:9092
+go run ./cmd/kafkasmoke      # publishes one fake flow record to Kafka
+set -a && source .env && set +a
+go run ./cmd/storagesmoke    # consumes it, persists it to Postgres, and prints the row back
 ```
 
-See [cmd/kafkasmoke](cmd/kafkasmoke/main.go) for details.
+See [cmd/kafkasmoke](cmd/kafkasmoke/main.go) and [cmd/storagesmoke](cmd/storagesmoke/main.go) for
+details.
 
 ## License
 
