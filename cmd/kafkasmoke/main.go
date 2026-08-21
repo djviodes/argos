@@ -24,6 +24,9 @@ import (
 	"github.com/djviodes/argos/internal/kafka"
 )
 
+// fakeFlowSource is a stand-in flow record satisfying kafka.FlowSource, so
+// this tool can exercise the kafka package without involving the flow package
+// or a live capture.
 type fakeFlowSource struct {
 	srcIP       netip.Addr
 	dstIP       netip.Addr

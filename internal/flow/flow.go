@@ -137,6 +137,10 @@ func (f *Flow) Run(ctx context.Context, source <-chan PacketSource) error {
 	}
 }
 
+// add folds pkt into the record for the flow its 5-tuple identifies, starting
+// a new record if this is the first packet seen for that flow. It returns an
+// error only when pkt's addresses can't be converted into a flow key, which
+// callers treat as a packet to drop rather than a fatal failure.
 func (f *Flow) add(pkt PacketSource) error {
 	key, err := newFlowKey(pkt)
 
@@ -165,6 +169,12 @@ func (f *Flow) add(pkt PacketSource) error {
 	return nil
 }
 
+// flushAll sends every record currently held to the channel returned by
+// Flushed, removing each from the map as it goes, and is how Run empties its
+// in-progress state on the way out. It stops early if ctx is cancelled,
+// leaving whatever it hasn't sent in the map: callers pass a ctx with a
+// bounded timeout so a downstream consumer that has stopped reading can't
+// block shutdown indefinitely.
 func (f *Flow) flushAll(ctx context.Context) {
 	for _, flow := range f.flows {
 		select {
@@ -176,6 +186,12 @@ func (f *Flow) flushAll(ctx context.Context) {
 	}
 }
 
+// flushIdle sends every record whose most recent packet arrived longer than
+// idleTimeout ago, treating those flows as complete, and leaves still-active
+// flows in the map to keep accumulating. Like flushAll, it stops early if ctx
+// is cancelled. Deleting entries while ranging over the map is safe here — Go
+// specifies that entries removed before the iteration reaches them are simply
+// not produced.
 func (f *Flow) flushIdle(ctx context.Context) {
 	const idleTimeout = 60 * time.Second
 
@@ -193,6 +209,10 @@ func (f *Flow) flushIdle(ctx context.Context) {
 	}
 }
 
+// newFlowKey builds the FlowKey identifying the flow pkt belongs to. It
+// returns an error if either address is a length netip.Addr can't represent,
+// which is the only way a packet that parsed successfully can still fail to
+// produce a key.
 func newFlowKey(pkt PacketSource) (FlowKey, error) {
 	srcAddr, ok := netip.AddrFromSlice(pkt.SrcIP())
 	if !ok {

@@ -1,3 +1,21 @@
+// Command storagesmoke manually verifies that the storage package can consume
+// a flow record from a real Kafka broker and persist it to a real PostgreSQL
+// database.
+//
+// Before running, start the broker and database, create the topic, and publish
+// a record for storage to find:
+//
+//	docker compose up -d
+//	docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --create \
+//		--topic flow-records --bootstrap-server localhost:9092
+//	go run ./cmd/kafkasmoke
+//
+// Then load the Postgres credentials and run this program. It consumes for ten
+// seconds, then prints every row in flow_records so the persisted values can be
+// compared by eye against what kafkasmoke published:
+//
+//	set -a && source .env && set +a
+//	go run ./cmd/storagesmoke
 package main
 
 import (
@@ -15,6 +33,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// dbRecord mirrors a row of the flow_records table, with its fields in the
+// column order SELECT * returns so a scanned row can be printed back out.
 type dbRecord struct {
 	ID          pgtype.UUID
 	SrcIP       netip.Addr

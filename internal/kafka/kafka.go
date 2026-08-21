@@ -28,6 +28,9 @@ type FlowSource interface {
 	LastSeen() time.Time
 }
 
+// messageWriter is the subset of kafka-go's *Writer that Kafka depends on,
+// declared as an interface so tests can substitute a fake and run without a
+// live broker.
 type messageWriter interface {
 	WriteMessages(ctx context.Context, msgs ...kafkago.Message) error
 	Close() error
@@ -38,6 +41,9 @@ type Kafka struct {
 	writer messageWriter
 }
 
+// flowMessage is the JSON shape a flow record takes on the wire. It restates
+// FlowSource's accessors as plain exported fields because encoding/json
+// serializes fields, not methods.
 type flowMessage struct {
 	SrcIP       netip.Addr
 	DstIP       netip.Addr
@@ -114,6 +120,11 @@ func (k *Kafka) Run(ctx context.Context, source <-chan FlowSource) error {
 	}
 }
 
+// publish serializes flow to JSON and writes it to the configured topic. The
+// message is keyed by the flow's 5-tuple so every message for a given flow
+// hashes to the same partition, preserving per-flow ordering, and its Time is
+// the flow's LastSeen — when the traffic was actually observed — rather than
+// the moment it reached the broker.
 func (k *Kafka) publish(ctx context.Context, flow FlowSource) error {
 	key := fmt.Sprintf("srcIP:%s-dstIP:%s-srcPort:%d-dstPort:%d-protocol:%d",
 		flow.SrcIP(), flow.DstIP(), flow.SrcPort(), flow.DstPort(), flow.Protocol())

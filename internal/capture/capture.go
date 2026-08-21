@@ -22,6 +22,12 @@ type Capture struct {
 // The channel is closed once Run returns.
 func (c *Capture) Packets() <-chan Packet { return c.packets }
 
+// Close closes the socket New opened, releasing its file descriptor. It is
+// safe to call more than once and from more than one goroutine — the close
+// happens at most once — so a caller that defers Close immediately after a
+// successful New does not conflict with Run closing the socket on its way out.
+// The underlying close error is discarded: there is no meaningful recovery
+// from failing to close a socket that is already being abandoned.
 func (c *Capture) Close() {
 	c.closeOnce.Do(func() { unix.Close(c.fd) })
 }

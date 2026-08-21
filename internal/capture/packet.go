@@ -40,6 +40,11 @@ func (p Packet) Len() int { return p.length }
 // Timestamp returns the time the packet was captured.
 func (p Packet) Timestamp() time.Time { return p.timestamp }
 
+// parsePacket parses a raw Ethernet frame into a Packet, with capturedAt
+// recording when the frame was read off the wire. Only IPv4 frames carrying
+// TCP or UDP are in scope; every other frame returns an error naming what put
+// it out of scope. Callers are expected to treat any error here as a packet to
+// drop, not as a fatal failure.
 func parsePacket(raw []byte, capturedAt time.Time) (p Packet, err error) {
 	const ipv4EtherType = 0x0800
 	const protocolTCP = 6
@@ -82,6 +87,10 @@ func parsePacket(raw []byte, capturedAt time.Time) (p Packet, err error) {
 	return
 }
 
+// parseEthernet returns the EtherType field of the 14-byte Ethernet II header
+// at the front of raw, which identifies the protocol carried in the payload
+// that follows. The two MAC addresses ahead of it are not needed for
+// flow-level accounting and are skipped.
 func parseEthernet(raw []byte) (etherType uint16, err error) {
 	if len(raw) < 14 {
 		err = fmt.Errorf("ethernet header truncated: got %d bytes, want at least 14", len(raw))
@@ -92,6 +101,12 @@ func parseEthernet(raw []byte) (etherType uint16, err error) {
 	return
 }
 
+// parseIPv4 parses the IPv4 header at the front of raw, returning the protocol
+// number of the payload that follows, the source and destination addresses,
+// and the length of the header itself. headerLen is read from the header
+// rather than assumed to be the 20-byte minimum, since it grows when IP
+// options are present — callers need the real value to find where the
+// transport header begins.
 func parseIPv4(raw []byte) (protocol uint8, srcIP, dstIP net.IP, headerLen int, err error) {
 	if len(raw) < 20 {
 		err = fmt.Errorf("IPv4 header truncated: got %d bytes, want at least 20", len(raw))
@@ -120,6 +135,10 @@ func parseIPv4(raw []byte) (protocol uint8, srcIP, dstIP net.IP, headerLen int, 
 	return
 }
 
+// parseTransport returns the source and destination ports from the front of
+// raw. TCP and UDP both place their ports in the same first four bytes of
+// their header, so one parse covers either, and nothing past the ports matters
+// for flow-level accounting.
 func parseTransport(raw []byte) (srcPort, dstPort uint16, err error) {
 	if len(raw) < 4 {
 		err = fmt.Errorf("transport header truncated: got %d bytes, want at least 4", len(raw))
