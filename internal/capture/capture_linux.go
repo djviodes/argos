@@ -67,7 +67,7 @@ func (c *Capture) Run(ctx context.Context) error {
 		default:
 			n, err := unix.Read(c.fd, buf)
 
-			if err != nil && errors.Is(err, unix.EAGAIN) {
+			if err != nil && (errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR)) {
 				continue
 			} else if err != nil {
 				return fmt.Errorf("starting capture failed: %w", err)

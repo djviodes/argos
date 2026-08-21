@@ -53,6 +53,7 @@ type fakePostgresWriter struct {
 	calls        int
 	execArgs     [][]any
 	rowsAffected int64
+	closed       bool
 }
 
 func (p *fakePostgresWriter) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -69,6 +70,8 @@ func (p *fakePostgresWriter) Exec(ctx context.Context, sql string, args ...any) 
 
 	return commandTag, nil
 }
+
+func (p *fakePostgresWriter) Close() { p.closed = true }
 
 var errFakeExec = errors.New("executing messages failed")
 
@@ -160,6 +163,10 @@ func TestRunFetchError(t *testing.T) {
 			t.Error("expected fakeReader to be closed")
 		}
 
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
+		}
+
 		if fakePGWriter.calls != 0 {
 			t.Errorf("got postgres writer calls %d, want postgres writer calls 0", fakePGWriter.calls)
 		}
@@ -197,6 +204,10 @@ func TestRunCtxCancelledWhileFetching(t *testing.T) {
 			t.Error("expected fakeReader to be closed")
 		}
 
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
+		}
+
 		if fakePGWriter.calls != 0 {
 			t.Errorf("got postgres writer calls %d, want postgres writer calls 0", fakePGWriter.calls)
 		}
@@ -232,6 +243,10 @@ func TestRunUnmarshalFailure(t *testing.T) {
 
 		if !fakeReader.closed {
 			t.Error("expected fakeReader to be closed")
+		}
+
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
 		}
 
 		if fakePGWriter.calls != 0 {
@@ -322,6 +337,10 @@ func TestRunPersistsRecord(t *testing.T) {
 		if !fakeReader.closed {
 			t.Error("expected fakeReader to be closed")
 		}
+
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
+		}
 	})
 }
 
@@ -363,6 +382,10 @@ func TestRunExecRetriesThenSucceeds(t *testing.T) {
 		if !fakeReader.closed {
 			t.Error("expected fakeReader to be closed")
 		}
+
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
+		}
 	})
 }
 
@@ -401,6 +424,10 @@ func TestRunExecExceedsRetryLimit(t *testing.T) {
 
 		if !fakeReader.closed {
 			t.Error("expected fakeReader to be closed")
+		}
+
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
 		}
 	})
 }
@@ -442,6 +469,10 @@ func TestRunExecRetryCtxCancelled(t *testing.T) {
 		if !fakeReader.closed {
 			t.Error("expected fakeReader to be closed")
 		}
+
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
+		}
 	})
 }
 
@@ -479,6 +510,10 @@ func TestRunCommitError(t *testing.T) {
 
 		if !fakeReader.closed {
 			t.Error("expected fakeReader to be closed")
+		}
+
+		if !fakePGWriter.closed {
+			t.Error("expected fakePGWriter to be closed")
 		}
 	})
 }
