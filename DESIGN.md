@@ -147,6 +147,11 @@ g.Go(func() error { return storageConsumer.Run(ctx) })
 return g.Wait()
 ```
 
+The values fed into each `New` call (`iface`, `kafkaBrokerAddr`, `topic`, `groupID`,
+`pgConnString`'s components) are read from environment variables via `os.Getenv`, not flags or
+hardcoded values — chosen because env vars most closely resemble how secrets actually get
+injected in a real deployment (e.g. AWS), unlike a CLI flag.
+
 `bridgePackets` and `bridgeFlows` are small adapters `cmd/argos` owns: each ranges over a
 producer's output channel of a concrete type (`<-chan capture.Packet`, `<-chan flow.FlowRecord`)
 and re-sends each value onto a channel of the consumer's interface type (`chan flow.PacketSource`,
@@ -190,7 +195,12 @@ process.
   needing to select on a raw file descriptor directly. Errors are split by severity: a
   `parsePacket` failure (malformed or out-of-scope input) is logged and the packet is dropped,
   not treated as fatal; a socket-level read error is fatal and propagates up, cascading a
-  shutdown through `errgroup`.
+  shutdown through `errgroup`. `capture.New` opens and binds the socket immediately, before `Run`
+  is ever called — so if a *later* stage's `New` fails during `cmd/argos` startup, the socket
+  would otherwise leak, since only `Run`'s own cleanup closed it. `Capture.Close` exists for
+  exactly this case (`cmd/argos` defers it right after a successful `capture.New`), and both it
+  and `Run`'s internal cleanup route through the same `sync.Once`-guarded close path, so it's safe
+  regardless of whether `Run` also ends up closing the same fd during normal shutdown.
 - **Flow timeout/expiry strategy**: idle timeout only, fixed at 60 seconds, checked via a
   periodic ticker inside `Flow.Run` rather than a per-flow timer. An active timeout (force-flushing
   a flow that's still receiving traffic after some maximum duration) was considered but deferred —
