@@ -58,7 +58,7 @@ func (c *Capture) Run(ctx context.Context) error {
 
 	buf := make([]byte, maxFrameSize)
 	defer close(c.packets)
-	defer unix.Close(c.fd)
+	defer c.Close()
 
 	for {
 		select {
